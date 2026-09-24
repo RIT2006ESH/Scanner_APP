@@ -1,0 +1,12 @@
+This is a privacy scanner test.
+
+Email: test@example.com
+Phone: +91 9876543210
+IP: 192.168.1.25
+PAN: ABCDE1234F
+Aadhaar: 2345 6789 0123
+Card: 4111 1111 1111 1111
+JWT: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U
+API key: sk_live_51H8xExampleFakeKey1234567890
+Version: 1.2.3.4
+Order number: 1234567890123456

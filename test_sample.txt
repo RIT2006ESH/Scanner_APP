@@ -1,0 +1,14 @@
+Contact Info:
+Email: test@example.com
+Phone: +91 9876543210
+IP: 192.168.1.25
+
+IDs:
+PAN: ABCDE1234F
+Aadhaar: 2345 6789 0123
+Card: 4111 1111 1111 1111
+
+Secrets:
+API Key: sk_live_abcdef123456
+JWT: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.sig
+Password: SuperSecret123!
