@@ -1,13 +1,30 @@
+import { open } from '@op-engineering/op-sqlite';
 import { ScanResultRecord } from '../../types';
 
-// Backed by react-native-sqlite-storage (SQLCipher-encrypted) or
-// react-native-mmkv with encryption enabled for simpler key-value needs.
+const db = open({
+  name: 'sentinelscan.db',
+  encryptionKey: 'TODO_replace_with_securely_generated_key', // TODO: pull from Android Keystore, not hardcoded
+});
+
+db.execute(`
+  CREATE TABLE IF NOT EXISTS scan_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filePath TEXT NOT NULL,
+    type TEXT NOT NULL,
+    maskedValue TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    timestamp INTEGER NOT NULL
+  );
+`);
 
 export async function saveResult(record: ScanResultRecord): Promise<void> {
-  // TODO: encrypted insert
+  db.execute(
+    'INSERT INTO scan_results (filePath, type, maskedValue, confidence, timestamp) VALUES (?, ?, ?, ?, ?)',
+    [record.filePath, record.type, record.maskedValue, record.confidence, record.timestamp],
+  );
 }
 
 export async function getAllResults(): Promise<ScanResultRecord[]> {
-  // TODO: encrypted read
-  return [];
+  const { rows } = db.execute('SELECT * FROM scan_results ORDER BY timestamp DESC');
+  return (rows?._array ?? []) as ScanResultRecord[];
 }
