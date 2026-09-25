@@ -78,6 +78,9 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.scanner_app"
+    buildFeatures {
+        buildConfig = true
+    }
     defaultConfig {
         applicationId "com.scanner_app"
         minSdkVersion rootProject.ext.minSdkVersion

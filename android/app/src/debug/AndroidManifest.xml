@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Debug-only: Metro dev server needs a socket, even on localhost -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>
