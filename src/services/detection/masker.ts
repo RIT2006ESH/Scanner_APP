@@ -93,7 +93,7 @@ function maskPan(rawValue: string): string {
   if (rawValue.length !== 10) {
     return MASK_CHAR.repeat(rawValue.length);
   }
-  return MASK_CHAR.repeat(6) + rawValue.substring(6);
+  return MASK_CHAR.repeat(5) + rawValue.substring(5, 9) + MASK_CHAR;
 }
 
 // For values like "rahul@gmail.com": keep the first and last

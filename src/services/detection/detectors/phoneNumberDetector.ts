@@ -8,7 +8,7 @@
 import { PiiMatch } from '../../../types';
 import { findMatches, SensitiveDataDetector } from './SensitiveDataDetector';
 
-const PHONE_PATTERN = /\b(?:(?:\+91|91)[-\s]?)?[6-9]\d{9}\b/g;
+const PHONE_PATTERN = /(?<![\w+])(?:(?:\+91|91)[-\s]?)?[6-9]\d{9}\b/g;
 
 export const phoneNumberDetector: SensitiveDataDetector = {
   type: 'PHONE_NUMBER',

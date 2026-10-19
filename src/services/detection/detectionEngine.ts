@@ -32,9 +32,10 @@ function overlaps(a: ValidatedMatch, b: ValidatedMatch): boolean {
   return a.start < b.end && a.end > b.start;
 }
 
-// Card and Aadhaar win ties against other types of the same length.
+// Ties on length: Card/Aadhaar beat Bank Account, which beats everything else.
 function priorityOf(match: ValidatedMatch): number {
-  return match.type === 'CARD_NUMBER' || match.type === 'AADHAAR_NUMBER' ? 1 : 0;
+  if (match.type === 'CARD_NUMBER' || match.type === 'AADHAAR_NUMBER') return 2;
+  return match.type === 'BANK_ACCOUNT' ? 1 : 0;
 }
 
 // Checks the math of a candidate. Only Card (Luhn) and Aadhaar (Verhoeff)
