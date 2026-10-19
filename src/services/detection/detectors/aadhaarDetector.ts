@@ -1,15 +1,18 @@
 // ============================================================
-// Aadhaar detector, ported from detector/AadhaarDetector.java
-//
-// Finds 12-digit numbers, with an optional space or dash between
-// each group of 4, e.g. "1234 5678 9012" or "1234-5678-9012".
-// The Verhoeff checksum (isValidAadhaar) is applied later.
+// Aadhaar detector. Rule from the web page's "Detection Rules":
+//   12 digits, grouped in blocks of 4. The first digit is 2 to 9 (UIDAI
+//   format: an Aadhaar number never starts with 0 or 1).
+// Valid forms: "234567890124", "2345 6789 0124", "2345-6789-0124".
+// The separator must be the same in both places. The Verhoeff checksum
+// (isValidAadhaar) is applied later.
 // ============================================================
 import { PiiMatch } from '../../../types';
 import { findMatches, SensitiveDataDetector } from './SensitiveDataDetector';
 
-// \b = word boundary, so digits inside a longer number are not matched.
-const AADHAAR_PATTERN = /\b\d{4}[ -]?\d{4}[ -]?\d{4}\b/g;
+// [2-9]\d{3}   first block, first digit 2 to 9
+// ([ -]?)      separator: a space, a dash or nothing
+// \1           the SAME separator again (so "2345 6789-0124" is not matched)
+const AADHAAR_PATTERN = /\b[2-9]\d{3}([ -]?)\d{4}\1\d{4}\b/g;
 
 export const aadhaarDetector: SensitiveDataDetector = {
   type: 'AADHAAR_NUMBER',

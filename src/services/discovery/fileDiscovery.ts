@@ -137,4 +137,3 @@ async function walkFolder(
     }
   }
 }
-

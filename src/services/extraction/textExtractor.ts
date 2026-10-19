@@ -9,13 +9,12 @@
 // An extractor reads one file and hands its text over in CHUNKS,
 // so a huge file never has to sit in memory as one big string.
 //
-// Not available yet: pdf (decision pending). getExtractor returns null
-// for it, so the scan counts it as "skipped", the same way Java treated
-// unsupported file types.
+// Not available yet: pdf (decision: skipped for now). getExtractor returns
+// null for it, so the scan counts it as "skipped", the same way Java
+// treated unsupported file types.
 // ============================================================
 import RNFS from 'react-native-fs';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
-import { getExtension } from '../config';
 import { extractDocx, extractXlsx } from './ooxmlExtractors';
 
 // Called once per chunk of text, in order. May be async; the extractor
@@ -119,4 +118,3 @@ export function getExtractor(
   }
   return EXTRACTORS.get(extension.toLowerCase()) ?? null;
 }
-

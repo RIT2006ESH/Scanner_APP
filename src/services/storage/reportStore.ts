@@ -1,22 +1,17 @@
 // ============================================================
-// Local result store (SQLite, encrypted) using op-sqlite.
-// Saves every finding of a scan and reads them back for the results
-// and history screens.
+// Local result store (SQLite, encrypted with sqlcipher) using op-sqlite.
+// Saves every finding of a scan, reads them back, and exports a CSV.
 //
 // Replaces the Java report files (report/Incremental*ReportWriter,
-// ReportRetentionCleaner): on a phone the findings live in an encrypted
-// database, and a CSV/Excel export can be built from it later.
+// ReportRetentionCleaner).
 //
-// NOTE: In current op-sqlite, execute() is ASYNC and returns a
-// Promise, so every call below uses await.
+// NOTE: In current op-sqlite, execute() is ASYNC, so every call awaits.
 // ============================================================
 import { open, DB } from '@op-engineering/op-sqlite';
 import RNFS from 'react-native-fs';
 import { Confidence, RiskLevel, ScanResult, SensitiveDataType } from '../../types';
 import { CONFIG } from '../config';
 
-// Holds the one-time database setup, so the tables are created
-// exactly once and every other call waits for it to finish.
 let dbPromise: Promise<DB> | null = null;
 
 function getDb(): Promise<DB> {
@@ -24,15 +19,10 @@ function getDb(): Promise<DB> {
     dbPromise = (async () => {
       const db = open({
         name: 'sentinelscan.db',
-        // TODO: pull from Android Keystore, not hardcoded.
-        // Left unchanged on purpose so the existing database stays readable.
+        // TODO: pull from Android Keystore (react-native-keychain).
+        // Left unchanged until then, so the existing database stays readable.
         encryptionKey: 'TODO_replace_with_securely_generated_key',
       });
-
-      // The first version of this app used a table called scan_results with
-      // a different layout. It only held test data, so it is removed.
-      // (This line can be deleted after the app has run once.)
-      await db.execute('DROP TABLE IF EXISTS scan_results');
 
       // One row per finding. Dates are epoch milliseconds.
       // fileCreationTime can be NULL (Android often does not provide it).
@@ -52,14 +42,16 @@ function getDb(): Promise<DB> {
         );
       `);
 
-      // Indexes make "results of one run" and "delete old results" fast.
-      // Older databases get the confidence column added; old rows keep the default.
+      // Databases created before the confidence column existed get it added.
+      // Old rows keep the default value, so nothing is lost.
       const info = await db.execute('PRAGMA table_info(scan_findings)');
-      if (!extractRows(info.rows).some((row) => row.name === 'confidence')) {
+      const hasConfidence = extractRows(info.rows).some((row) => row.name === 'confidence');
+      if (!hasConfidence) {
         await db.execute(
           "ALTER TABLE scan_findings ADD COLUMN confidence TEXT NOT NULL DEFAULT 'PATTERN'",
         );
       }
+
       await db.execute('CREATE INDEX IF NOT EXISTS idx_findings_run ON scan_findings (runId)');
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_findings_time ON scan_findings (scanTimestamp)',
@@ -76,15 +68,12 @@ function getDb(): Promise<DB> {
 }
 
 // ------------------------------------------------------------
-// Write queue: writes run strictly one after another, so two
-// transactions can never overlap.
+// Write queue: writes run strictly one after another.
 // ------------------------------------------------------------
 let writeChain: Promise<unknown> = Promise.resolve();
 
 function runSerialized<T>(task: () => Promise<T>): Promise<T> {
   const result = writeChain.then(task);
-  // The chain itself must never stay "rejected", or every later write
-  // would be skipped. The caller still receives the real error via `result`.
   writeChain = result.catch(() => undefined);
   return result;
 }
@@ -95,8 +84,7 @@ const INSERT_SQL =
   'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
 
 // Saves many findings of one scan run in a single transaction:
-// either all are saved or none. Uses ? placeholders, so values are never
-// concatenated into the SQL string (protects against SQL injection).
+// either all are saved or none. Uses ? placeholders (no SQL injection).
 export async function saveFindings(runId: string, results: readonly ScanResult[]): Promise<void> {
   if (results.length === 0) {
     return;
@@ -132,7 +120,6 @@ export async function saveFindings(runId: string, results: readonly ScanResult[]
   });
 }
 
-// Saves one finding (convenience wrapper around saveFindings).
 export function saveFinding(runId: string, result: ScanResult): Promise<void> {
   return saveFindings(runId, [result]);
 }
@@ -143,7 +130,6 @@ export function saveFinding(runId: string, result: ScanResult): Promise<void> {
 
 // Newer op-sqlite: result.rows is a plain array.
 // Older op-sqlite: rows were wrapped as rows._array.
-// Handling both so this works whichever version is installed.
 function extractRows(rows: unknown): Record<string, unknown>[] {
   if (Array.isArray(rows)) {
     return rows as Record<string, unknown>[];
@@ -152,7 +138,6 @@ function extractRows(rows: unknown): Record<string, unknown>[] {
   return (legacy ?? []) as Record<string, unknown>[];
 }
 
-// Turns one database row back into a ScanResult.
 function rowToScanResult(row: Record<string, unknown>): ScanResult {
   return {
     fileName: String(row.fileName),
@@ -185,30 +170,6 @@ export async function getAllFindings(limit: number = 1000): Promise<ScanResult[]
     [limit],
   );
   return extractRows(result.rows).map(rowToScanResult);
-}
-
-// ------------------------------------------------------------
-// Cleanup (Java: ReportRetentionCleaner)
-// ------------------------------------------------------------
-
-// Deletes findings older than the retention period (30 days by default,
-// from config.ts). Call it at the end of each scan.
-export async function deleteExpiredFindings(
-  retentionDays: number = CONFIG.report.retentionDays,
-): Promise<void> {
-  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-  await runSerialized(async () => {
-    const db = await getDb();
-    await db.execute('DELETE FROM scan_findings WHERE scanTimestamp < ?', [cutoff]);
-  });
-}
-
-// Deletes every saved finding (for a "Clear all results" button).
-export async function clearAllFindings(): Promise<void> {
-  await runSerialized(async () => {
-    const db = await getDb();
-    await db.execute('DELETE FROM scan_findings');
-  });
 }
 
 // ------------------------------------------------------------
@@ -262,4 +223,24 @@ export async function exportFindingsToCsv(runId?: string): Promise<string> {
   const path = exportFolder() + '/sentinelscan_' + stamp + '.csv';
   await RNFS.writeFile(path, lines.join('\n') + '\n', 'utf8');
   return path;
+}
+
+// ------------------------------------------------------------
+// Cleanup (Java: ReportRetentionCleaner)
+// ------------------------------------------------------------
+export async function deleteExpiredFindings(
+  retentionDays: number = CONFIG.report.retentionDays,
+): Promise<void> {
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  await runSerialized(async () => {
+    const db = await getDb();
+    await db.execute('DELETE FROM scan_findings WHERE scanTimestamp < ?', [cutoff]);
+  });
+}
+
+export async function clearAllFindings(): Promise<void> {
+  await runSerialized(async () => {
+    const db = await getDb();
+    await db.execute('DELETE FROM scan_findings');
+  });
 }

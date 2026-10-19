@@ -6,18 +6,24 @@
 // Flow of one scan:
 //   1. Check free storage (Java: DiskSpaceGuard).
 //   2. Walk the chosen folders (fileDiscovery.ts).
-//   3. For every file: pick an extractor, read it in chunks, run the
-//      detectors on each chunk, mask the findings, save them.
+//   3. For every file: pick an extractor by file type, read it in chunks,
+//      run the detectors on each chunk, mask the findings, save them.
 //      With deepScan on, findings of weak types (see needsSlmReview) are
 //      NOT saved yet; they are queued for step 4.
 //   4. Deep scan only: load the model once, let it confirm or reject each
-//      queued finding, save the confirmed ones, unload the model.
-//   5. Mark the run completed / cancelled / failed, delete old results.
+//      queued finding (within a time limit), save the confirmed ones,
+//      unload the model.
+//   5. Mark the run as completed / cancelled / failed, delete old results.
 //
-// Files without an extractor (pdf, for now) are counted as "skipped".
+// Mobile differences:
+//   - Files are processed one at a time (one JavaScript thread, no pool).
+//   - The caller creates the ScanContext, so the screen can follow the
+//     progress (context.subscribe) and stop the scan (context.requestCancel).
+//   - Findings are saved to the local database after each file, in one
+//     transaction, instead of being written to a CSV/Excel report.
 // ============================================================
 import RNFS from 'react-native-fs';
-import { Confidence, ScanResult, SensitiveDataType } from '../types';
+import { ScanResult, SensitiveDataType } from '../types';
 import { CONFIG, getExtension, isSupportedExtension } from './config';
 import {
   DEFAULT_SCAN_OPTIONS,
@@ -45,31 +51,52 @@ import {
 } from './slm/slmClassifier';
 import { deleteExpiredFindings, saveFindings } from './storage/reportStore';
 
+// What to scan.
 export interface ScanRequest {
+  // Folders to scan (what the user picked).
   roots: readonly string[];
+  // Recursive / hidden files / excluded folders. Default: all on.
   options?: ScanOptions;
+  // Only look for these data types. Empty or missing = all types.
   enabledTypes?: ReadonlySet<SensitiveDataType> | null;
+  // true: let the on-device model double-check uncertain findings.
   deepScan?: boolean;
 }
 
+// What the model review did (null in the result = deep scan was off).
 export interface SlmStats {
-  reviewed: number;
-  rejected: number;
-  note: string | null;
+  reviewed: number; // findings the model looked at
+  rejected: number; // findings the model said were false alarms (dropped)
+  note: string | null; // why the model was not (fully) used, if so
 }
 
+// The summary of the scan, plus the model review numbers.
 export type ScanOutcome = ScanSummary & { slm: SlmStats | null };
 
+// A finding waiting for the model's opinion.
 interface SlmCandidate {
   match: ValidatedMatch;
-  snippet: string;
+  snippet: string; // text around the value, value marked with [[ ]]
   file: FileInfo;
 }
 
-const MAX_SLM_CANDIDATES = 200;
+// At most this many findings are sent to the model in one scan. Any extra
+// are kept as normal findings without a model review.
+const MAX_SLM_CANDIDATES = 100;
+
+// The model review stops after this long. Findings that were not reviewed
+// yet are kept as normal findings. (Each review takes a second or more,
+// and much longer on an emulator.)
+const SLM_TIME_BUDGET_MS = 2 * 60 * 1000;
+
+// Save findings in groups of this size during the model review.
 const SAVE_BATCH_SIZE = 20;
+
+// Every this many files, the screen gets a moment to redraw.
 const YIELD_EVERY_FILES = 10;
 
+// JavaScript is single threaded. A zero-delay timer lets the screen
+// redraw and touches work, so the app does not look frozen during a scan.
 const yieldToUi = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 // Java: DiskSpaceGuard.hasEnoughSpace. If the free space cannot be read,
@@ -94,6 +121,8 @@ async function processFile(
 ): Promise<void> {
   context.setCurrentFile(file.path);
 
+  // Unsupported file types and types without an extractor (pdf, for now)
+  // are counted as skipped, like in Java.
   const extension = getExtension(file.name);
   if (!isSupportedExtension(extension)) {
     context.incrementFilesSkipped();
@@ -105,8 +134,11 @@ async function processFile(
     return;
   }
 
+  // Values already reported in THIS file (the same number is reported once).
   const alreadyFoundInFile = new Set<string>();
 
+  // File details stored with every finding. If Android did not give a
+  // modified time, the scan time is used instead.
   const fileInfo: FileInfo = {
     filePath: file.path,
     fileName: file.name,
@@ -119,6 +151,8 @@ async function processFile(
   let timedOut = false;
   const startedAt = Date.now();
 
+  // The extractor reads the file and calls this for every chunk of text.
+  // Throwing from here stops the extractor (used for cancel and timeout).
   const work = extractor(file.path, (chunk) => {
     if (timedOut || context.isCancelRequested()) {
       throw new Error('File processing stopped');
@@ -144,8 +178,12 @@ async function processFile(
       context.addFinding(result);
     }
   });
+  // If the timeout wins the race below, this later failure must not
+  // become an "unhandled promise rejection".
   work.catch(() => undefined);
 
+  // Java: future.get(perFileTimeoutSeconds). A running task cannot be killed
+  // in JavaScript; the flag makes the next chunk stop it instead.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
@@ -164,35 +202,43 @@ async function processFile(
         'A file exceeded the ' + CONFIG.perFileTimeoutSeconds + 's budget and was abandoned: ' + file.path,
       );
     } else if (!context.isCancelRequested()) {
+      // Java: IOException while extracting -> counted as an error.
       context.incrementErrorsEncountered();
       console.warn('Failed to extract text from ' + file.path + ': ' + String(error));
     }
+    // If the user cancelled, this is not an error.
   } finally {
     clearTimeout(timer);
   }
 
+  // Save what was found in this file (also after a timeout or cancel, so
+  // the findings shown on screen are never missing from the database).
   if (fileFindings.length > 0) {
     try {
       await saveFindings(context.runId, fileFindings);
     } catch (error) {
+      // Java only logged this; here it also counts as an error, because a
+      // finding that is on screen but not stored would be lost silently.
       context.incrementErrorsEncountered();
       console.warn('Failed to save findings of ' + file.path + ': ' + String(error));
     }
   }
 
+  // Time spent: detection is measured, extraction is the rest.
   context.recordDetectionTime(detectionMs);
   context.recordExtractionTime(extension, Math.max(0, Date.now() - startedAt - detectionMs));
 }
 
 // ------------------------------------------------------------
 // Stage 2: the model confirms or rejects the queued findings.
-// Anything not reviewed (model missing, model failed, scan cancelled)
-// is kept as a finding marked MODEL_UNREVIEWED.
+// Anything that was not reviewed (model missing, model failed, time limit
+// reached, scan cancelled) is kept as a normal pattern-only finding.
 // ------------------------------------------------------------
 async function reviewWithSlm(queue: SlmCandidate[], context: ScanContext): Promise<SlmStats> {
   const stats: SlmStats = { reviewed: 0, rejected: 0, note: null };
   const pending: ScanResult[] = [];
 
+  // Saves the findings collected so far.
   const flush = async (): Promise<void> => {
     if (pending.length === 0) {
       return;
@@ -206,8 +252,9 @@ async function reviewWithSlm(queue: SlmCandidate[], context: ScanContext): Promi
     }
   };
 
-  const accept = (candidate: SlmCandidate, confidence: Confidence): void => {
-    const result = buildScanResult(candidate.match, candidate.file, Date.now(), confidence);
+  // Accepts a candidate as a real finding.
+  const accept = (candidate: SlmCandidate): void => {
+    const result = buildScanResult(candidate.match, candidate.file);
     context.addFinding(result);
     pending.push(result);
   };
@@ -226,18 +273,26 @@ async function reviewWithSlm(queue: SlmCandidate[], context: ScanContext): Promi
     console.warn('Model load failed: ' + String(error));
   }
 
+  // index = the first candidate that has not been reviewed yet.
   let index = 0;
   if (modelReady) {
+    // The time limit counts from here, not from the model loading.
+    const reviewStart = Date.now();
     try {
       for (; index < queue.length; index++) {
         if (context.isCancelRequested()) {
+          break;
+        }
+        if (Date.now() - reviewStart > SLM_TIME_BUDGET_MS) {
+          stats.note =
+            'Model review stopped after ' + SLM_TIME_BUDGET_MS / 1000 + ' seconds. ' +
+            (queue.length - index) + ' finding(s) were kept without review.';
           break;
         }
         context.setCurrentFile('Model review ' + (index + 1) + ' of ' + queue.length);
 
         const candidate = queue[index];
         let genuine = true; // if the model fails, the finding is kept
-        let confidence: Confidence = 'MODEL_UNREVIEWED';
         try {
           genuine = await classifyCandidate(
             candidate.match.type,
@@ -245,13 +300,12 @@ async function reviewWithSlm(queue: SlmCandidate[], context: ScanContext): Promi
             candidate.snippet,
           );
           stats.reviewed++;
-          confidence = 'MODEL_CONFIRMED';
         } catch (error) {
           console.warn('Model could not review a finding, keeping it: ' + String(error));
         }
 
         if (genuine) {
-          accept(candidate, confidence);
+          accept(candidate);
         } else {
           stats.rejected++;
         }
@@ -268,9 +322,9 @@ async function reviewWithSlm(queue: SlmCandidate[], context: ScanContext): Promi
     }
   }
 
-  // Not reviewed: keep as findings the model did not check.
+  // Not reviewed: keep as pattern-only findings.
   for (; index < queue.length; index++) {
-    accept(queue[index], 'MODEL_UNREVIEWED');
+    accept(queue[index]);
   }
   await flush();
   return stats;
@@ -320,6 +374,7 @@ export async function executeScan(
       () => context.isCancelRequested(),
     );
 
+    // Stage 2: the model looks at the uncertain findings.
     let slm: SlmStats | null = null;
     if (slmQueue != null) {
       slm =
@@ -344,6 +399,8 @@ export async function executeScan(
       );
     }
 
+    // Java: reportRetentionCleaner.cleanup(). A cleanup failure must not
+    // fail a scan that already finished.
     try {
       await deleteExpiredFindings();
     } catch (error) {

@@ -1,19 +1,3 @@
-// ============================================================
-// Stage 2 of the architecture diagram: SLM reasoning on the device.
-// (The Java web version had no SLM; this part is new.)
-//
-// What happens here:
-//   - Stage 1 (regex + checksum) finds candidates. Some patterns are weak
-//     (any 9-18 digit number can look like a bank account). For those, a
-//     small language model looks at the text AROUND the value and says
-//     YES (really that kind of data) or NO.
-//   - The model runs fully on the phone with llama.rn. Nothing is sent
-//     anywhere. The only network use is the one-time download of the
-//     model file itself.
-//
-// Safety rule: if the model fails or its answer cannot be understood,
-// the finding is KEPT. Missing a real leak is worse than a false alarm.
-// ============================================================
 import RNFS from 'react-native-fs';
 import { initLlama } from 'llama.rn';
 import { SensitiveDataType } from '../../types';

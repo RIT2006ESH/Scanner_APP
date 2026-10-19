@@ -1,43 +1,41 @@
 // ============================================================
-// SentinelScan main screen, following the architecture diagram:
-//   Manual trigger -> Select files -> Start scan -> results.
+// SentinelScan main screen. One scrolling page with the same sections
+// as the web dashboard:
+//   1. Scan Configuration   2. Scan Status   3. Scan Summary   4. Findings
+// (5. Scan History, Detection Rules and Settings come next.)
+//
+// The bottom bar (ActionBar) is always visible: it chooses the files and
+// starts or stops the scan, so nobody has to scroll to find "Run Scan".
+// The page is never scrolled by the program: the result of a scan is
+// shown in the bottom bar, and the user scrolls the page by hand.
 //
 // How a scan works here:
 //   1. "Select files" opens Android's file picker. Each chosen file is
 //      copied into a temporary folder inside the app (picked files are
 //      content:// links that the scanner cannot read directly).
-//   2. "Start scan" scans that temporary folder. With "Deep scan" on, an
-//      on-device model double-checks uncertain matches.
+//   2. "Run Scan" scans that folder. With "Deep scan" on, an on-device
+//      model double-checks uncertain matches.
 //   3. When the scan ends, the temporary copies are DELETED, and the
 //      results are read back from the encrypted local database.
-//
-// Not built yet: folder selection (needs a folder-access library),
-// scheduled scans, CSV export.
 // ============================================================
 import React, { useCallback, useEffect, useReducer, useState } from 'react';
-import { FlatList, Pressable, StatusBar, StyleSheet, Switch, Text, View } from 'react-native';
+import { Keyboard, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import RNFS from 'react-native-fs';
 import { pick, types } from '@react-native-documents/picker';
-import { ScanContext } from './src/services/core/scanContext';
+import { DEFAULT_SCAN_OPTIONS, ScanContext, ScanOptions } from './src/services/core/scanContext';
 import { executeScan } from './src/services/orchestrator';
-import { downloadModel, isModelDownloaded, MODEL_SIZE_LABEL } from './src/services/slm/slmClassifier';
-import {
-  exportFindingsToCsv,
-  getAllFindings,
-  getFindingsByRun,
-} from './src/services/storage/reportStore';
-import { RiskLevel, ScanResult } from './src/types';
+import { downloadModel, isModelDownloaded } from './src/services/slm/slmClassifier';
+import { getAllFindings, getFindingsByRun } from './src/services/storage/reportStore';
+import { ScanResult, SensitiveDataType } from './src/types';
+import { ActionBar } from './src/ui/ActionBar';
+import { COLORS, StatusBadge } from './src/ui/components';
+import { ConfigSection } from './src/ui/ConfigSection';
+import { FindingsSection } from './src/ui/FindingsSection';
+import { StatusSection, SummarySection } from './src/ui/StatusSections';
 
 // Temporary folder that holds the copies of the chosen files.
 const STAGING_FOLDER = RNFS.CachesDirectoryPath + '/SentinelScanSelected';
-
-// Colour of each risk level.
-const RISK_COLORS: Record<RiskLevel, string> = {
-  CRITICAL: '#C62828',
-  MEDIUM: '#EF6C00',
-  NORMAL: '#2E7D32',
-};
 
 // Removes the temporary copies (also used before a new selection).
 async function clearStaging(): Promise<void> {
@@ -50,24 +48,6 @@ async function clearStaging(): Promise<void> {
   }
 }
 
-// One finding row. The value shown is already masked.
-function FindingRow({ item }: { item: ScanResult }): React.JSX.Element {
-  return (
-    <View style={styles.findingRow}>
-      <View style={[styles.riskDot, { backgroundColor: RISK_COLORS[item.riskLevel] }]} />
-      <View style={styles.findingText}>
-        <Text style={styles.findingType}>
-          {item.dataType} ({item.riskLevel})
-        </Text>
-        <Text style={styles.findingValue}>{item.maskedValue}</Text>
-        <Text style={styles.findingFile} numberOfLines={1}>
-          {item.fileName}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
 function App(): React.JSX.Element {
   const [context, setContext] = useState<ScanContext | null>(null);
   const [running, setRunning] = useState(false);
@@ -76,12 +56,15 @@ function App(): React.JSX.Element {
   // Results read from the database (null = show the live scan instead).
   const [dbFindings, setDbFindings] = useState<ScanResult[] | null>(null);
 
-  // Deep scan = on-device model double-checks uncertain matches.
+  // Scan configuration.
+  const [selectedPii, setSelectedPii] = useState<SensitiveDataType[]>([]);
+  const [options, setOptions] = useState<ScanOptions>(DEFAULT_SCAN_OPTIONS);
   const [deepScan, setDeepScan] = useState(false);
-  // Is the model file on the phone? (null = not checked yet)
   const [modelReady, setModelReady] = useState<boolean | null>(null);
-  // Model download progress in percent (null = not downloading).
   const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
+
+  // The bottom bar hides while the keyboard is open (search box).
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   // The scan state is a plain object that changes by itself, so a counter
   // is used to ask React to redraw the screen.
@@ -90,6 +73,16 @@ function App(): React.JSX.Element {
   // Check once at start whether the model is already downloaded.
   useEffect(() => {
     isModelDownloaded().then(setModelReady);
+  }, []);
+
+  // Hide the bottom bar while the keyboard is open.
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardOpen(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
   }, []);
 
   // Downloads the model (one time, about 400 MB).
@@ -136,7 +129,7 @@ function App(): React.JSX.Element {
 
       setSelectedNames(names);
       setDbFindings(null);
-      setNotice(names.length + ' file(s) selected. Press "Start scan".');
+      setNotice(names.length + ' file(s) ready. Tap "Run Scan".');
     } catch (error) {
       // Closing the picker without choosing is not an error.
       if (String(error).toLowerCase().includes('cancel')) {
@@ -148,7 +141,7 @@ function App(): React.JSX.Element {
   }, [running]);
 
   // Scans the chosen files, deletes the copies, then shows the saved results.
-  const startScan = useCallback(async () => {
+  const runScan = useCallback(async () => {
     if (running) {
       return;
     }
@@ -166,18 +159,21 @@ function App(): React.JSX.Element {
     const stopListening = scan.subscribe(() => redraw());
 
     try {
-      const outcome = await executeScan(scan, { roots: [STAGING_FOLDER], deepScan });
+      const outcome = await executeScan(scan, {
+        roots: [STAGING_FOLDER],
+        deepScan,
+        options,
+        enabledTypes: selectedPii.length > 0 ? new Set(selectedPii) : null,
+      });
 
       // Read the findings back from the database. This proves they were
       // really saved, not just held in memory.
       const saved = await getFindingsByRun(scan.runId);
       setDbFindings(saved);
 
-      let message =
-        'Saved ' + saved.length + ' of ' + scan.totalFindingsCount + ' findings in the database.';
+      let message = 'Saved ' + saved.length + ' of ' + scan.totalFindingsCount + ' findings in the database.';
       if (outcome.slm != null) {
-        message +=
-          ' Model review: ' + outcome.slm.reviewed + ' checked, ' + outcome.slm.rejected + ' dropped.';
+        message += ' Model review: ' + outcome.slm.reviewed + ' checked, ' + outcome.slm.rejected + ' dropped.';
         if (outcome.slm.note != null) {
           message += ' ' + outcome.slm.note;
         }
@@ -195,191 +191,96 @@ function App(): React.JSX.Element {
       setSelectedNames([]);
       redraw();
     }
-  }, [running, selectedNames, deepScan]);
+  }, [running, selectedNames, deepScan, options, selectedPii]);
 
-  const cancelScan = useCallback(() => {
+  const stopScan = useCallback(() => {
     context?.requestCancel();
   }, [context]);
 
   // Shows the most recent findings from all earlier scans.
-  const showSaved = useCallback(async () => {
+  const loadSaved = useCallback(async () => {
     try {
-      const saved = await getAllFindings(200);
+      const saved = await getAllFindings(500);
       setDbFindings(saved);
-      const message =
+      setNotice(
         saved.length === 0
           ? 'The database has no saved findings yet.'
-          : 'Showing ' + saved.length + ' saved findings from the database.';
-      console.log(message);
-      setNotice(message);
+          : 'Showing ' + saved.length + ' saved findings from the database.',
+      );
     } catch (error) {
       console.warn('Could not read saved results: ' + String(error));
       setNotice('Could not read saved results: ' + String(error));
     }
   }, []);
 
-  // Writes the most recent saved findings to a CSV file in the app's folder.
-  const exportCsv = useCallback(async () => {
-    try {
-      const path = await exportFindingsToCsv();
-      console.log('CSV saved: ' + path);
-      setNotice('CSV saved: ' + path);
-    } catch (error) {
-      console.warn('CSV export failed: ' + String(error));
-      setNotice('CSV export failed: ' + String(error));
-    }
-  }, []);
-
-  // Which list to show: database results if loaded, else the live scan.
-  const findings: ScanResult[] = dbFindings ?? context?.getFindings() ?? [];
-
-  // Short summary of the selected files for the screen.
-  const selectedSummary =
-    selectedNames.length <= 4
-      ? selectedNames.join(', ')
-      : selectedNames.slice(0, 4).join(', ') + ' and ' + (selectedNames.length - 4) + ' more';
-
-  const downloading = downloadPercent != null;
+  // Findings to show, newest first: database results if loaded, else the live scan.
+  const findings: ScanResult[] = dbFindings ?? (context != null ? [...context.getFindings()].reverse() : []);
 
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="dark-content" />
       <SafeAreaView style={styles.screen}>
         <View style={styles.header}>
-          <Text style={styles.title}>SentinelScan</Text>
-          <Text style={styles.subtitle}>Everything stays on this device</Text>
-        </View>
-
-        <View style={styles.buttonRow}>
-          <Pressable style={[styles.button, styles.buttonSecondary]} onPress={selectFiles} disabled={running}>
-            <Text style={styles.buttonSecondaryText}>Select files</Text>
-          </Pressable>
-          {running ? (
-            <Pressable style={[styles.button, styles.buttonDanger]} onPress={cancelScan}>
-              <Text style={styles.buttonText}>Cancel</Text>
-            </Pressable>
-          ) : (
-            <Pressable
-              style={[
-                styles.button,
-                styles.buttonPrimary,
-                (selectedNames.length === 0 || downloading) && styles.buttonDisabled,
-              ]}
-              onPress={startScan}
-              disabled={selectedNames.length === 0 || downloading}>
-              <Text style={styles.buttonText}>Start scan</Text>
-            </Pressable>
-          )}
-          <Pressable style={[styles.button, styles.buttonSecondary]} onPress={showSaved} disabled={running}>
-            <Text style={styles.buttonSecondaryText}>Saved results</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.toggleRow}>
-          <View style={styles.toggleText}>
-            <Text style={styles.toggleTitle}>Deep scan</Text>
-            <Text style={styles.toggleHint}>On-device model double-checks uncertain matches</Text>
+          <View style={styles.headerText}>
+            <Text style={styles.title}>SentinelScan</Text>
+            <Text style={styles.subtitle}>Scan files for sensitive data. Everything stays on this device.</Text>
           </View>
-          <Switch value={deepScan} onValueChange={setDeepScan} disabled={running} />
+          <StatusBadge status={context?.status ?? null} />
         </View>
 
-        <Pressable
-          style={[styles.button, styles.buttonSecondary, styles.downloadButton]}
-          onPress={exportCsv}
-          disabled={running}>
-          <Text style={styles.buttonSecondaryText}>Export CSV</Text>
-        </Pressable>
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <ConfigSection
+            running={running}
+            selectedNames={selectedNames}
+            selectedPii={selectedPii}
+            onChangePii={setSelectedPii}
+            options={options}
+            onChangeOptions={setOptions}
+            deepScan={deepScan}
+            onChangeDeepScan={setDeepScan}
+            modelReady={modelReady}
+            downloadPercent={downloadPercent}
+            onDownloadModel={downloadModelFile}
+          />
+          <StatusSection context={context} />
+          <SummarySection context={context} />
+          <FindingsSection findings={findings} onNotice={setNotice} onLoadSaved={loadSaved} />
+        </ScrollView>
 
-        {deepScan && modelReady === false && (
-          <Pressable
-            style={[styles.button, styles.buttonSecondary, styles.downloadButton]}
-            onPress={downloadModelFile}
-            disabled={downloading}>
-            <Text style={styles.buttonSecondaryText}>
-              {downloading
-                ? 'Downloading model... ' + downloadPercent + '%'
-                : 'Download model (' + MODEL_SIZE_LABEL + ', one time)'}
-            </Text>
-          </Pressable>
+        {!keyboardOpen && (
+          <ActionBar
+            running={running}
+            selectedCount={selectedNames.length}
+            busy={downloadPercent != null}
+            currentFile={context?.currentFile ?? null}
+            notice={notice}
+            onDismissNotice={() => setNotice(null)}
+            onSelect={selectFiles}
+            onRun={runScan}
+            onStop={stopScan}
+          />
         )}
-
-        {selectedNames.length > 0 && (
-          <Text style={styles.selected} numberOfLines={3}>
-            Selected: {selectedSummary}
-          </Text>
-        )}
-
-        {notice != null && <Text style={styles.notice}>{notice}</Text>}
-
-        {context != null && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Last scan: {context.status}</Text>
-            <Text style={styles.cardLine}>
-              Files scanned: {context.filesScanned}   Skipped: {context.filesSkipped}   Errors:{' '}
-              {context.errorsEncountered}
-            </Text>
-            <Text style={styles.cardLine}>
-              Findings: {context.totalFindingsCount}   Critical: {context.countByRisk('CRITICAL')}   Medium:{' '}
-              {context.countByRisk('MEDIUM')}   Normal: {context.countByRisk('NORMAL')}
-            </Text>
-            {context.currentFile != null && (
-              <Text style={styles.cardFile} numberOfLines={1}>
-                {context.currentFile}
-              </Text>
-            )}
-          </View>
-        )}
-
-        <FlatList
-          data={findings}
-          keyExtractor={(item, index) => item.filePath + '|' + item.scanTimestamp + '|' + index}
-          renderItem={({ item }) => <FindingRow item={item} />}
-          ListEmptyComponent={<Text style={styles.empty}>No findings to show yet.</Text>}
-          contentContainerStyle={styles.listContent}
-        />
       </SafeAreaView>
     </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#FFFFFF' },
-  header: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 },
-  title: { fontSize: 24, fontWeight: '700', color: '#0D2B4E' },
-  subtitle: { fontSize: 13, color: '#5F6B7A', marginTop: 2 },
-  buttonRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 8 },
-  button: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  buttonPrimary: { backgroundColor: '#0D2B4E' },
-  buttonDanger: { backgroundColor: '#C62828' },
-  buttonSecondary: { backgroundColor: '#EEF2F7' },
-  buttonDisabled: { opacity: 0.4 },
-  buttonText: { color: '#FFFFFF', fontWeight: '600', fontSize: 14 },
-  buttonSecondaryText: { color: '#0D2B4E', fontWeight: '600', fontSize: 13, textAlign: 'center' },
-  toggleRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 4 },
-  toggleText: { flex: 1 },
-  toggleTitle: { fontSize: 14, fontWeight: '600', color: '#0D2B4E' },
-  toggleHint: { fontSize: 11, color: '#78909C', marginTop: 1 },
-  downloadButton: { flex: 0, marginHorizontal: 16, marginVertical: 6 },
-  selected: { marginHorizontal: 16, marginBottom: 4, fontSize: 12, color: '#0D2B4E' },
-  notice: { marginHorizontal: 16, marginBottom: 8, fontSize: 12, color: '#37474F' },
-  card: { marginHorizontal: 16, marginBottom: 8, padding: 12, borderRadius: 8, backgroundColor: '#F5F7FA' },
-  cardTitle: { fontSize: 15, fontWeight: '700', color: '#0D2B4E', marginBottom: 4 },
-  cardLine: { fontSize: 13, color: '#263238', marginTop: 2 },
-  cardFile: { fontSize: 11, color: '#78909C', marginTop: 6 },
-  listContent: { paddingHorizontal: 16, paddingBottom: 24 },
-  empty: { textAlign: 'center', color: '#90A4AE', marginTop: 24 },
-  findingRow: {
+  screen: { flex: 1, backgroundColor: '#ECEFF3' },
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 14,
     paddingVertical: 10,
+    backgroundColor: COLORS.white,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#CFD8DC',
+    borderBottomColor: COLORS.border,
   },
-  riskDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
-  findingText: { flex: 1 },
-  findingType: { fontSize: 13, fontWeight: '600', color: '#263238' },
-  findingValue: { fontSize: 15, color: '#000000', marginTop: 2 },
-  findingFile: { fontSize: 11, color: '#90A4AE', marginTop: 2 },
+  headerText: { flex: 1, marginRight: 8 },
+  title: { fontSize: 20, fontWeight: '700', color: COLORS.navy },
+  subtitle: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
+  scroll: { flex: 1 },
+  content: { paddingVertical: 12 },
 });
 
 export default App;
