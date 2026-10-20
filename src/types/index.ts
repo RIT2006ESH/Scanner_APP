@@ -26,6 +26,14 @@ export type SensitiveDataType = (typeof SENSITIVE_DATA_TYPES)[number];
 export const RISK_LEVELS = ['CRITICAL', 'MEDIUM', 'NORMAL'] as const;
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 
+// How the scanner knows a finding is real.
+//   CHECKSUM - the number passed its checksum (Luhn for cards, Verhoeff for Aadhaar)
+//   PATTERN  - only the format matched (no checksum exists for this type)
+//   MODEL    - the on-device model looked at the surrounding text and confirmed it
+// Stored as text in the database, so older rows without a value read as PATTERN.
+export const CONFIDENCE_LEVELS = ['CHECKSUM', 'PATTERN', 'MODEL'] as const;
+export type Confidence = (typeof CONFIDENCE_LEVELS)[number];
+
 // A raw regex hit, before validation and masking (Java: record PiiMatch).
 export interface PiiMatch {
   value: string; // the matched text
@@ -45,4 +53,5 @@ export interface ScanResult {
   scanTimestamp: number;
   fileCreationTime: number | null;
   fileModifiedTime: number;
+  confidence: Confidence;
 }
