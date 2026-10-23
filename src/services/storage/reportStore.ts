@@ -1,9 +1,10 @@
 // ============================================================
 // Local result store (SQLite, encrypted with sqlcipher) using op-sqlite.
-// Saves every finding of a scan, reads them back, and exports a CSV.
+// Saves every finding of a scan and one record per scan run, reads them
+// back, and exports a CSV.
 //
 // Replaces the Java report files (report/Incremental*ReportWriter,
-// ReportRetentionCleaner).
+// ReportRetentionCleaner) and the web "Scan History" list.
 //
 // NOTE: In current op-sqlite, execute() is ASYNC, so every call awaits.
 // ============================================================
@@ -11,6 +12,24 @@ import { open, DB } from '@op-engineering/op-sqlite';
 import RNFS from 'react-native-fs';
 import { Confidence, RiskLevel, ScanResult, SensitiveDataType } from '../../types';
 import { CONFIG } from '../config';
+import { ScanRunStatus } from '../core/scanContext';
+
+// One finished scan (the web page's Scan History row).
+export interface ScanRunRecord {
+  runId: string;
+  status: ScanRunStatus;
+  scanPath: string;
+  startTime: number; // epoch milliseconds
+  endTime: number | null;
+  criticalCount: number;
+  mediumCount: number;
+  normalCount: number;
+  totalFindings: number;
+  filesScanned: number;
+  filesSkipped: number;
+  errorsEncountered: number;
+  deepScan: boolean;
+}
 
 let dbPromise: Promise<DB> | null = null;
 
@@ -52,10 +71,31 @@ function getDb(): Promise<DB> {
         );
       }
 
+      // One row per scan run (the Scan History list). Created if missing,
+      // so an existing database keeps all its findings.
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS scan_runs (
+          runId TEXT PRIMARY KEY,
+          status TEXT NOT NULL,
+          scanPath TEXT NOT NULL,
+          startTime INTEGER NOT NULL,
+          endTime INTEGER,
+          criticalCount INTEGER NOT NULL DEFAULT 0,
+          mediumCount INTEGER NOT NULL DEFAULT 0,
+          normalCount INTEGER NOT NULL DEFAULT 0,
+          totalFindings INTEGER NOT NULL DEFAULT 0,
+          filesScanned INTEGER NOT NULL DEFAULT 0,
+          filesSkipped INTEGER NOT NULL DEFAULT 0,
+          errorsEncountered INTEGER NOT NULL DEFAULT 0,
+          deepScan INTEGER NOT NULL DEFAULT 0
+        );
+      `);
+
       await db.execute('CREATE INDEX IF NOT EXISTS idx_findings_run ON scan_findings (runId)');
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_findings_time ON scan_findings (scanTimestamp)',
       );
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_runs_start ON scan_runs (startTime)');
       return db;
     })();
 
@@ -124,6 +164,35 @@ export function saveFinding(runId: string, result: ScanResult): Promise<void> {
   return saveFindings(runId, [result]);
 }
 
+// Saves (or replaces) the record of one scan run. Called when a scan
+// ends, whatever the result: completed, cancelled or failed.
+export async function saveRun(run: ScanRunRecord): Promise<void> {
+  await runSerialized(async () => {
+    const db = await getDb();
+    await db.execute(
+      'INSERT OR REPLACE INTO scan_runs ' +
+        '(runId, status, scanPath, startTime, endTime, criticalCount, mediumCount, normalCount, ' +
+        'totalFindings, filesScanned, filesSkipped, errorsEncountered, deepScan) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        run.runId,
+        run.status,
+        run.scanPath,
+        run.startTime,
+        run.endTime,
+        run.criticalCount,
+        run.mediumCount,
+        run.normalCount,
+        run.totalFindings,
+        run.filesScanned,
+        run.filesSkipped,
+        run.errorsEncountered,
+        run.deepScan ? 1 : 0,
+      ],
+    );
+  });
+}
+
 // ------------------------------------------------------------
 // Reading
 // ------------------------------------------------------------
@@ -152,6 +221,24 @@ function rowToScanResult(row: Record<string, unknown>): ScanResult {
   };
 }
 
+function rowToRun(row: Record<string, unknown>): ScanRunRecord {
+  return {
+    runId: String(row.runId),
+    status: String(row.status) as ScanRunStatus,
+    scanPath: String(row.scanPath),
+    startTime: Number(row.startTime),
+    endTime: row.endTime == null ? null : Number(row.endTime),
+    criticalCount: Number(row.criticalCount),
+    mediumCount: Number(row.mediumCount),
+    normalCount: Number(row.normalCount),
+    totalFindings: Number(row.totalFindings),
+    filesScanned: Number(row.filesScanned),
+    filesSkipped: Number(row.filesSkipped),
+    errorsEncountered: Number(row.errorsEncountered),
+    deepScan: Number(row.deepScan) === 1,
+  };
+}
+
 // All findings of one scan run, newest first.
 export async function getFindingsByRun(runId: string, limit: number = 5000): Promise<ScanResult[]> {
   const db = await getDb();
@@ -170,6 +257,13 @@ export async function getAllFindings(limit: number = 1000): Promise<ScanResult[]
     [limit],
   );
   return extractRows(result.rows).map(rowToScanResult);
+}
+
+// The scan history, newest scan first.
+export async function getRuns(limit: number = 200): Promise<ScanRunRecord[]> {
+  const db = await getDb();
+  const result = await db.execute('SELECT * FROM scan_runs ORDER BY startTime DESC LIMIT ?', [limit]);
+  return extractRows(result.rows).map(rowToRun);
 }
 
 // ------------------------------------------------------------
@@ -235,6 +329,7 @@ export async function deleteExpiredFindings(
   await runSerialized(async () => {
     const db = await getDb();
     await db.execute('DELETE FROM scan_findings WHERE scanTimestamp < ?', [cutoff]);
+    await db.execute('DELETE FROM scan_runs WHERE startTime < ?', [cutoff]);
   });
 }
 
@@ -242,5 +337,6 @@ export async function clearAllFindings(): Promise<void> {
   await runSerialized(async () => {
     const db = await getDb();
     await db.execute('DELETE FROM scan_findings');
+    await db.execute('DELETE FROM scan_runs');
   });
 }

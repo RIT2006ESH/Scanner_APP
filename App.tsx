@@ -1,8 +1,9 @@
 // ============================================================
 // SentinelScan main screen. One scrolling page with the same sections
 // as the web dashboard:
-//   1. Scan Configuration   2. Scan Status   3. Scan Summary   4. Findings
-// (5. Scan History, Detection Rules and Settings come next.)
+//   1. Scan Configuration   2. Scan Status   3. Scan Summary
+//   4. Findings             5. Scan History
+// (Detection Rules and Settings panels come next.)
 //
 // The bottom bar (ActionBar) is always visible: it chooses the files and
 // starts or stops the scan, so nobody has to scroll to find "Run Scan".
@@ -24,14 +25,21 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import RNFS from 'react-native-fs';
 import { pick, types } from '@react-native-documents/picker';
 import { DEFAULT_SCAN_OPTIONS, ScanContext, ScanOptions } from './src/services/core/scanContext';
+import { exportFindingsCsv } from './src/services/export/reportExport';
 import { executeScan } from './src/services/orchestrator';
 import { downloadModel, isModelDownloaded } from './src/services/slm/slmClassifier';
-import { getAllFindings, getFindingsByRun } from './src/services/storage/reportStore';
+import {
+  getAllFindings,
+  getFindingsByRun,
+  getRuns,
+  ScanRunRecord,
+} from './src/services/storage/reportStore';
 import { ScanResult, SensitiveDataType } from './src/types';
 import { ActionBar } from './src/ui/ActionBar';
 import { COLORS, StatusBadge } from './src/ui/components';
 import { ConfigSection } from './src/ui/ConfigSection';
 import { FindingsSection } from './src/ui/FindingsSection';
+import { HistorySection } from './src/ui/HistorySection';
 import { StatusSection, SummarySection } from './src/ui/StatusSections';
 
 // Temporary folder that holds the copies of the chosen files.
@@ -55,6 +63,8 @@ function App(): React.JSX.Element {
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
   // Results read from the database (null = show the live scan instead).
   const [dbFindings, setDbFindings] = useState<ScanResult[] | null>(null);
+  // The scan history (newest first).
+  const [runs, setRuns] = useState<ScanRunRecord[]>([]);
 
   // Scan configuration.
   const [selectedPii, setSelectedPii] = useState<SensitiveDataType[]>([]);
@@ -70,10 +80,20 @@ function App(): React.JSX.Element {
   // is used to ask React to redraw the screen.
   const [, redraw] = useReducer((n: number) => n + 1, 0);
 
-  // Check once at start whether the model is already downloaded.
-  useEffect(() => {
-    isModelDownloaded().then(setModelReady);
+  // Reads the scan history from the database.
+  const refreshRuns = useCallback(async () => {
+    try {
+      setRuns(await getRuns(200));
+    } catch (error) {
+      console.warn('Could not read the scan history: ' + String(error));
+    }
   }, []);
+
+  // At start: load the scan history and check whether the model is downloaded.
+  useEffect(() => {
+    refreshRuns();
+    isModelDownloaded().then(setModelReady);
+  }, [refreshRuns]);
 
   // Hide the bottom bar while the keyboard is open.
   useEffect(() => {
@@ -189,9 +209,11 @@ function App(): React.JSX.Element {
       // The temporary copies are not needed any more: delete them.
       await clearStaging();
       setSelectedNames([]);
+      // The scan is in the history now: show it.
+      await refreshRuns();
       redraw();
     }
-  }, [running, selectedNames, deepScan, options, selectedPii]);
+  }, [running, selectedNames, deepScan, options, selectedPii, refreshRuns]);
 
   const stopScan = useCallback(() => {
     context?.requestCancel();
@@ -210,6 +232,21 @@ function App(): React.JSX.Element {
     } catch (error) {
       console.warn('Could not read saved results: ' + String(error));
       setNotice('Could not read saved results: ' + String(error));
+    }
+  }, []);
+
+  // Exports the findings of one past scan as a CSV (History > Export).
+  const exportRun = useCallback(async (runId: string) => {
+    try {
+      const rows = await getFindingsByRun(runId, 100000);
+      if (rows.length === 0) {
+        setNotice('This scan has no findings to export.');
+        return;
+      }
+      const path = await exportFindingsCsv(rows);
+      setNotice('Report saved: ' + path);
+    } catch (error) {
+      setNotice('Could not export the report: ' + String(error));
     }
   }, []);
 
@@ -245,6 +282,7 @@ function App(): React.JSX.Element {
           <StatusSection context={context} />
           <SummarySection context={context} />
           <FindingsSection findings={findings} onNotice={setNotice} onLoadSaved={loadSaved} />
+          <HistorySection runs={runs} onExportRun={exportRun} />
         </ScrollView>
 
         {!keyboardOpen && (
