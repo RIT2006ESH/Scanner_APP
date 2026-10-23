@@ -1,18 +1,4 @@
-// ============================================================
-// Text extraction, ported from the Java web version:
-//   extractor/TextExtractor.java    -> TextExtractor type
-//   extractor/ExtractorFactory.java -> getExtractor
-//   extractor/TxtTextExtractor.java -> extractPlainText
-//   extractor/CsvTextExtractor.java -> (CSV is read as plain text, see below)
-//   extractor/Docx / Xlsx           -> ooxmlExtractors.ts
-//
-// An extractor reads one file and hands its text over in CHUNKS,
-// so a huge file never has to sit in memory as one big string.
-//
-// Not available yet: pdf (decision: skipped for now). getExtractor returns
-// null for it, so the scan counts it as "skipped", the same way Java
-// treated unsupported file types.
-// ============================================================
+
 import RNFS from 'react-native-fs';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { extractDocx, extractXlsx } from './ooxmlExtractors';
@@ -27,25 +13,8 @@ export type TextExtractor = (
   onChunk: ChunkConsumer,
 ) => Promise<void>;
 
-// How many BYTES are read from the file at a time.
-// Java used 1,000,000 characters; 500,000 is used here because
-// phones have less memory and a long regex run blocks the screen.
 const CHUNK_SIZE_BYTES = 500_000;
-
-// The last 200 characters of each chunk are repeated at the start of the
-// next chunk, so a number cut in half by a chunk border is still found.
-// The same value found twice is reported once (the per-file dedupe).
 const OVERLAP_CHARS = 200;
-
-// ------------------------------------------------------------
-// Plain text reader (used for .txt and .csv).
-//
-// Reads the file in byte chunks. The position moves forward by BYTES
-// (not characters), because a UTF-8 character can be several bytes.
-// A multi-byte character cut at a chunk border may turn into a
-// replacement character, which is harmless: every pattern we look for
-// (digits, A-Z, '@') is plain ASCII and is never split.
-// ------------------------------------------------------------
 const extractPlainText: TextExtractor = async (filePath, onChunk) => {
   const stat = await RNFS.stat(filePath);
   const totalBytes = Number(stat.size);

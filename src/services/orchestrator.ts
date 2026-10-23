@@ -1,29 +1,5 @@
-// ============================================================
-// Scan orchestrator, ported from the Java web version:
-//   core/ScanOrchestrator.java -> executeScan, processFile
-// plus the new Stage 2 (on-device SLM review) from the architecture diagram.
-//
-// Flow of one scan:
-//   1. Check free storage (Java: DiskSpaceGuard).
-//   2. Walk the chosen folders (fileDiscovery.ts).
-//   3. For every file: pick an extractor by file type, read it in chunks,
-//      run the detectors on each chunk, mask the findings, save them.
-//      With deepScan on, findings of weak types (see needsSlmReview) are
-//      NOT saved yet; they are queued for step 4.
-//   4. Deep scan only: load the model once, let it confirm or reject each
-//      queued finding (within a time limit), save the confirmed ones,
-//      unload the model.
-//   5. Mark the run as completed / cancelled / failed, delete old results.
-//
-// Mobile differences:
-//   - Files are processed one at a time (one JavaScript thread, no pool).
-//   - The caller creates the ScanContext, so the screen can follow the
-//     progress (context.subscribe) and stop the scan (context.requestCancel).
-//   - Findings are saved to the local database after each file, in one
-//     transaction, instead of being written to a CSV/Excel report.
-// ============================================================
 import RNFS from 'react-native-fs';
-import { ScanResult, SensitiveDataType } from '../types';
+import { Confidence, ScanResult, SensitiveDataType } from '../types';
 import { CONFIG, getExtension, isSupportedExtension } from './config';
 import {
   DEFAULT_SCAN_OPTIONS,
@@ -49,7 +25,7 @@ import {
   needsSlmReview,
   unloadModel,
 } from './slm/slmClassifier';
-import { deleteExpiredFindings, saveFindings } from './storage/reportStore';
+import { deleteExpiredFindings, saveFindings, saveRun } from './storage/reportStore';
 
 // What to scan.
 export interface ScanRequest {
@@ -81,12 +57,12 @@ interface SlmCandidate {
 }
 
 // At most this many findings are sent to the model in one scan. Any extra
-// are kept as normal findings without a model review.
+// are kept as findings the model did not review.
 const MAX_SLM_CANDIDATES = 100;
 
 // The model review stops after this long. Findings that were not reviewed
-// yet are kept as normal findings. (Each review takes a second or more,
-// and much longer on an emulator.)
+// yet are kept as findings the model did not review. (Each review takes a
+// second or more, and much longer on an emulator.)
 const SLM_TIME_BUDGET_MS = 2 * 60 * 1000;
 
 // Save findings in groups of this size during the model review.
@@ -107,6 +83,30 @@ async function hasEnoughFreeSpace(): Promise<boolean> {
     return info.freeSpace >= CONFIG.minFreeDiskSpaceMb * 1024 * 1024;
   } catch {
     return true;
+  }
+}
+
+// Saves the scan in the history list. A failure here is only logged: it
+// must never turn a finished scan into a failed one.
+async function recordRun(context: ScanContext, deepScan: boolean): Promise<void> {
+  try {
+    await saveRun({
+      runId: context.runId,
+      status: context.status,
+      scanPath: context.scanPath,
+      startTime: context.startTime,
+      endTime: context.endTime,
+      criticalCount: context.countByRisk('CRITICAL'),
+      mediumCount: context.countByRisk('MEDIUM'),
+      normalCount: context.countByRisk('NORMAL'),
+      totalFindings: context.totalFindingsCount,
+      filesScanned: context.filesScanned,
+      filesSkipped: context.filesSkipped,
+      errorsEncountered: context.errorsEncountered,
+      deepScan,
+    });
+  } catch (error) {
+    console.warn('Could not save the scan history entry: ' + String(error));
   }
 }
 
@@ -164,12 +164,19 @@ async function processFile(
 
     for (const match of matches) {
       // Deep scan: weak findings wait for the model's opinion.
-      if (slmQueue != null && needsSlmReview(match.type) && slmQueue.length < MAX_SLM_CANDIDATES) {
-        slmQueue.push({
-          match,
-          snippet: buildContext(chunk, match.start, match.end),
-          file: fileInfo,
-        });
+      if (slmQueue != null && needsSlmReview(match.type)) {
+        if (slmQueue.length < MAX_SLM_CANDIDATES) {
+          slmQueue.push({
+            match,
+            snippet: buildContext(chunk, match.start, match.end),
+            file: fileInfo,
+          });
+          continue;
+        }
+        // The queue is full: keep the finding, but say the model did not see it.
+        const overflow = buildScanResult(match, fileInfo, Date.now(), 'MODEL_UNREVIEWED');
+        fileFindings.push(overflow);
+        context.addFinding(overflow);
         continue;
       }
 
@@ -232,7 +239,7 @@ async function processFile(
 // ------------------------------------------------------------
 // Stage 2: the model confirms or rejects the queued findings.
 // Anything that was not reviewed (model missing, model failed, time limit
-// reached, scan cancelled) is kept as a normal pattern-only finding.
+// reached, scan cancelled) is kept as a finding marked MODEL_UNREVIEWED.
 // ------------------------------------------------------------
 async function reviewWithSlm(queue: SlmCandidate[], context: ScanContext): Promise<SlmStats> {
   const stats: SlmStats = { reviewed: 0, rejected: 0, note: null };
@@ -252,9 +259,9 @@ async function reviewWithSlm(queue: SlmCandidate[], context: ScanContext): Promi
     }
   };
 
-  // Accepts a candidate as a real finding.
-  const accept = (candidate: SlmCandidate): void => {
-    const result = buildScanResult(candidate.match, candidate.file);
+  // Accepts a candidate as a finding, with the given confidence.
+  const accept = (candidate: SlmCandidate, confidence: Confidence): void => {
+    const result = buildScanResult(candidate.match, candidate.file, Date.now(), confidence);
     context.addFinding(result);
     pending.push(result);
   };
@@ -293,19 +300,21 @@ async function reviewWithSlm(queue: SlmCandidate[], context: ScanContext): Promi
 
         const candidate = queue[index];
         let genuine = true; // if the model fails, the finding is kept
+        let reviewedByModel = false;
         try {
           genuine = await classifyCandidate(
             candidate.match.type,
             candidate.match.value,
             candidate.snippet,
           );
+          reviewedByModel = true;
           stats.reviewed++;
         } catch (error) {
           console.warn('Model could not review a finding, keeping it: ' + String(error));
         }
 
         if (genuine) {
-          accept(candidate);
+          accept(candidate, reviewedByModel ? 'MODEL_CONFIRMED' : 'MODEL_UNREVIEWED');
         } else {
           stats.rejected++;
         }
@@ -322,9 +331,9 @@ async function reviewWithSlm(queue: SlmCandidate[], context: ScanContext): Promi
     }
   }
 
-  // Not reviewed: keep as pattern-only findings.
+  // Not reviewed: keep, marked as not reviewed by the model.
   for (; index < queue.length; index++) {
-    accept(queue[index]);
+    accept(queue[index], 'MODEL_UNREVIEWED');
   }
   await flush();
   return stats;
@@ -338,19 +347,21 @@ export async function executeScan(
   request: ScanRequest,
 ): Promise<ScanOutcome> {
   const options = request.options ?? DEFAULT_SCAN_OPTIONS;
+  const deepScan = request.deepScan === true;
 
   if (!(await hasEnoughFreeSpace())) {
     console.error('Scan aborted before starting: insufficient storage.');
     context.incrementErrorsEncountered();
     context.fail();
+    await recordRun(context, deepScan);
     return { ...context.toSummary(), slm: null };
   }
 
   const activeDetectors = buildActiveDetectors(request.enabledTypes);
-  const slmQueue: SlmCandidate[] | null = request.deepScan ? [] : null;
+  const slmQueue: SlmCandidate[] | null = deepScan ? [] : null;
   console.log(
     'Starting scan run ' + context.runId + ' with ' + activeDetectors.length +
-      ' active detectors, deep scan: ' + (request.deepScan ? 'on' : 'off') +
+      ' active detectors, deep scan: ' + (deepScan ? 'on' : 'off') +
       ', scope: ' + context.scanPath,
   );
 
@@ -399,8 +410,9 @@ export async function executeScan(
       );
     }
 
-    // Java: reportRetentionCleaner.cleanup(). A cleanup failure must not
-    // fail a scan that already finished.
+    // Scan history entry, then Java's reportRetentionCleaner.cleanup().
+    // A cleanup failure must not fail a scan that already finished.
+    await recordRun(context, deepScan);
     try {
       await deleteExpiredFindings();
     } catch (error) {
@@ -411,6 +423,7 @@ export async function executeScan(
   } catch (error) {
     console.error('Scan run ' + context.runId + ' failed: ' + String(error));
     context.fail();
+    await recordRun(context, deepScan);
     throw error;
   }
 }

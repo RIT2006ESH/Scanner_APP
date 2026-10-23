@@ -1,46 +1,20 @@
-// ============================================================
-// Word (.docx) and Excel (.xlsx) text extraction, redesigned for
-// mobile. Java version: extractor/DocxTextExtractor.java and
-// extractor/XlsxTextExtractor.java (Apache POI + SAX streaming).
-//
-// Both formats are ZIP files that contain XML. There is no SAX parser
-// or POI on a phone, so this file:
-//   1. reads the whole file (size-limited) and unzips ONLY the XML parts
-//      it needs, using fflate (pure JavaScript, no native code);
-//   2. pulls the text out of the XML with regular expressions;
-//   3. hands the text over in chunks and lets the UI breathe between them.
-// ============================================================
+
 import RNFS from 'react-native-fs';
 import { strFromU8, unzipSync } from 'fflate';
 import type { TextExtractor } from './textExtractor';
 
-// atob exists at runtime (Hermes), but this project's TypeScript setup
-// does not know about it, so its type is declared here.
 declare function atob(data: string): string;
 
-// Files bigger than this are refused (the whole file is held in memory).
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
-// Zip-bomb guard: refuse if the parts we want would unpack to more than this.
 const MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
 
-// Word: send a chunk once it holds this many characters (same as Java).
 const FLUSH_THRESHOLD_CHARS = 200_000;
 
-// Excel: send a chunk every this many rows (same as Java).
 const ROWS_PER_CHUNK = 2000;
 
-// JavaScript is single threaded. A zero-delay timer lets the screen
-// redraw and touches work between chunks, so the app does not look frozen.
 const yieldToUi = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
-// ------------------------------------------------------------
-// Zip helpers
-// ------------------------------------------------------------
-
-// Reads the file and unzips only the entries accepted by `wanted`.
-// Returns { entryName: bytes }. Throws on a bad, huge or unreadable file;
-// the caller counts that as an error, like Java's IOException.
 async function readZipEntries(
   filePath: string,
   wanted: (entryName: string) => boolean,
@@ -50,7 +24,6 @@ async function readZipEntries(
     throw new Error('File is larger than ' + MAX_FILE_BYTES + ' bytes: ' + filePath);
   }
 
-  // The file crosses the React Native bridge as a base64 string.
   const base64 = await RNFS.readFile(filePath, 'base64');
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -60,7 +33,6 @@ async function readZipEntries(
 
   let totalUncompressed = 0;
   return unzipSync(bytes, {
-    // Called for every entry; return true only for the ones we need.
     filter: (entry) => {
       if (!wanted(entry.name)) {
         return false;
@@ -74,11 +46,6 @@ async function readZipEntries(
   });
 }
 
-// ------------------------------------------------------------
-// XML helpers
-// ------------------------------------------------------------
-
-// Turns XML escapes back into characters: "&amp;" -> "&", "&#x41;" -> "A".
 function decodeXml(text: string): string {
   return text.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);/g, (whole, entity: string) => {
     switch (entity) {
@@ -93,7 +60,6 @@ function decodeXml(text: string): string {
       case 'apos':
         return "'";
       default: {
-        // Numeric reference: "#65" (decimal) or "#x41" (hex).
         const code =
           entity.charAt(1) === 'x' ? parseInt(entity.substring(2), 16) : parseInt(entity.substring(1), 10);
         try {
@@ -105,12 +71,6 @@ function decodeXml(text: string): string {
     }
   });
 }
-
-// One text piece: <w:t>..</w:t> in Word, <t>..</t> in Excel.
-// (?:\w+:)? allows any namespace prefix. "<w:tab/>" and "<w:tbl>" do not match.
-const TEXT_RUN = /<(?:\w+:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:\w+:)?t>/g;
-
-// Joins all text pieces inside an XML fragment.
 function joinTextRuns(fragment: string): string {
   let text = '';
   for (const run of fragment.matchAll(TEXT_RUN)) {
@@ -118,13 +78,6 @@ function joinTextRuns(fragment: string): string {
   }
   return text;
 }
-
-// ------------------------------------------------------------
-// Word (.docx): the text lives in word/document.xml
-// (Java also read only this one part, so headers/footers are skipped).
-// ------------------------------------------------------------
-
-// Either a text piece (group 1 is set) or the end of a paragraph (no group).
 const DOCX_TOKEN = /<(?:\w+:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:\w+:)?t>|<\/(?:\w+:)?p>/g;
 
 export const extractDocx: TextExtractor = async (filePath, onChunk) => {
@@ -139,12 +92,8 @@ export const extractDocx: TextExtractor = async (filePath, onChunk) => {
 
   for (const token of xml.matchAll(DOCX_TOKEN)) {
     if (token[1] !== undefined) {
-      // Text pieces inside one paragraph are joined directly, because Word
-      // often splits one number into several pieces.
       buffer += decodeXml(token[1]);
     } else {
-      // End of a paragraph: new line. Chunks are cut only here, so a
-      // number is never split across two chunks.
       buffer += '\n';
       if (buffer.length >= FLUSH_THRESHOLD_CHARS) {
         await onChunk(buffer);
@@ -159,15 +108,8 @@ export const extractDocx: TextExtractor = async (filePath, onChunk) => {
   }
 };
 
-// ------------------------------------------------------------
-// Excel (.xlsx): text cells point into xl/sharedStrings.xml, and each
-// sheet is its own file under xl/worksheets/.
-// ------------------------------------------------------------
-
-// One shared string: "<si/>" (empty) or "<si>...</si>".
 const SHARED_STRING = /<(?:\w+:)?si\s*\/>|<(?:\w+:)?si(?:\s[^>]*)?>([\s\S]*?)<\/(?:\w+:)?si>/g;
 
-// Phonetic hints (Japanese furigana) that must not be added to the text.
 const PHONETIC = /<(?:\w+:)?rPh\b[\s\S]*?<\/(?:\w+:)?rPh>/g;
 
 // Builds the list of shared strings; a cell stores the INDEX into this list.
@@ -188,13 +130,6 @@ const CELL = /<(?:\w+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?c>)/g;
 const CELL_VALUE = /<(?:\w+:)?v(?:\s[^>]*)?>([\s\S]*?)<\/(?:\w+:)?v>/;
 const CELL_TYPE = /(?:^|\s)t="([^"]*)"/;
 
-// Returns the text of one cell.
-//   t="s"         -> index into the shared strings
-//   t="inlineStr" -> text stored inside the cell
-//   t="b"/"e"     -> boolean / error: no text
-//   anything else -> the raw stored value (numbers, formula text results)
-// NOTE: numbers come out as stored. Java asked POI for the value as shown
-// on screen; the stored form is the same for text and normal numbers.
 function readCell(attributes: string, body: string, sharedStrings: string[]): string {
   const type = CELL_TYPE.exec(attributes)?.[1];
 

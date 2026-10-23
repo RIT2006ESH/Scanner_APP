@@ -1,27 +1,6 @@
-// ============================================================
-// File discovery, ported from the Java web version:
-//   core/FileWalker.java -> walkFiles
-//
-// Walks one or more root folders and calls onFile for every file found.
-// It does NOT filter by file type: like Java, unsupported files are
-// reported too, and the scan loop counts them as "skipped".
-//
-// Mobile differences:
-//   - Roots are folders the user picked, not drives (C:\, D:\).
-//   - Files are handled one at a time: onFile is awaited before the next
-//     file is visited (there is no thread pool or work queue on a phone).
-//   - Currently uses normal file paths (RNFS.readDir). This needs Android's
-//     "All files access" permission for shared folders like Downloads.
-//     Folders of the app itself need no permission. If scoped access (SAF
-//     folder picker, content:// URIs) is added later, only this file changes.
-// ============================================================
 import RNFS, { ReadDirItem } from 'react-native-fs';
 import { CONFIG } from '../config';
 import { DEFAULT_SCAN_OPTIONS, ScanOptions } from '../core/scanContext';
-
-// What the scan loop gets for each file.
-// Times are epoch milliseconds; null means Android did not provide them
-// (creation time is almost never available).
 export interface DiscoveredFile {
   path: string;
   name: string;
@@ -30,18 +9,11 @@ export interface DiscoveredFile {
   creationTime: number | null;
 }
 
-// Called for every file. May be async; the walk waits for it.
 export type FileHandler = (file: DiscoveredFile) => void | Promise<void>;
 
-// Safety net against endless folder loops (for example a link that points
-// back to a parent folder). Java's walker does not follow links at all.
 const MAX_DEPTH = 50;
 
-// Folder names to skip, lowercased once. The comparison is case-insensitive
-// like Java's equalsIgnoreCase.
 const EXCLUDED_FOLDER_NAMES = CONFIG.excludedFolderNames.map((name) => name.toLowerCase());
-
-// Hidden on Android means the name starts with a dot.
 function isHiddenName(name: string): boolean {
   return name.startsWith('.');
 }
@@ -49,12 +21,6 @@ function isHiddenName(name: string): boolean {
 function isExcludedFolderName(name: string): boolean {
   return EXCLUDED_FOLDER_NAMES.includes(name.toLowerCase());
 }
-
-// Walks every root. Java: FileWalker.walk(roots, options, isCancelled, handler)
-//   roots       - folders to scan
-//   onFile      - called for each file found
-//   options     - recursive / hidden files / excluded folders
-//   isCancelled - checked before every entry; once true, the walk stops
 export async function walkFiles(
   roots: readonly string[],
   onFile: FileHandler,
@@ -66,8 +32,6 @@ export async function walkFiles(
       console.log('Scan cancelled, stopping file discovery.');
       return;
     }
-
-    // A root that no longer exists is skipped, not treated as a failure.
     let exists = false;
     try {
       exists = await RNFS.exists(root);
@@ -83,8 +47,6 @@ export async function walkFiles(
   }
 }
 
-// Visits one folder. Files are reported; sub-folders are entered only
-// when options.recursive is true (Java: walkRecursive / walkTopLevelOnly).
 async function walkFolder(
   folderPath: string,
   depth: number,
