@@ -3,8 +3,6 @@
 // Ported from the Java web version (model/*, detector/PiiMatch).
 // ============================================================
 
-// All kinds of sensitive data the scanner can detect.
-// Names match the Java enum SensitiveDataType exactly.
 export const SENSITIVE_DATA_TYPES = [
   'CARD_NUMBER',
   'AADHAAR_NUMBER',
@@ -19,31 +17,35 @@ export const SENSITIVE_DATA_TYPES = [
   'EMAIL',
 ] as const;
 
-// Union type built from the array above, so the list and the type never go out of sync.
 export type SensitiveDataType = (typeof SENSITIVE_DATA_TYPES)[number];
 
-// How dangerous a finding is (Java: enum RiskLevel).
 export const RISK_LEVELS = ['CRITICAL', 'MEDIUM', 'NORMAL'] as const;
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 
-// How the scanner knows a finding is real.
-//   CHECKSUM - the number passed its checksum (Luhn for cards, Verhoeff for Aadhaar)
-//   PATTERN  - only the format matched (no checksum exists for this type)
-//   MODEL    - the on-device model looked at the surrounding text and confirmed it
-// Stored as text in the database, so older rows without a value read as PATTERN.
-export const CONFIDENCE_LEVELS = ['CHECKSUM', 'PATTERN', 'MODEL'] as const;
+// How a finding was verified:
+//   CHECKSUM         - passed a checksum (Luhn / Verhoeff)
+//   PATTERN          - matched by regex only
+//   MODEL_CONFIRMED  - the on-device model said YES
+//   MODEL_UNREVIEWED - the model could not review it, so it was kept
+// (A model NO drops the finding, so it is never stored.)
+export const CONFIDENCE_LEVELS = [
+  'CHECKSUM',
+  'PATTERN',
+  'MODEL_CONFIRMED',
+  'MODEL_UNREVIEWED',
+] as const;
 export type Confidence = (typeof CONFIDENCE_LEVELS)[number];
 
 // A raw regex hit, before validation and masking (Java: record PiiMatch).
 export interface PiiMatch {
-  value: string; // the matched text
-  start: number; // start index in the scanned text
-  end: number;   // end index in the scanned text
+  value: string;
+  start: number;
+  end: number;
 }
 
 // A complete scan result for one finding (Java: class ScanResult).
-// All dates are epoch milliseconds (Java used LocalDateTime).
-// fileCreationTime can be null because Android often does not expose it.
+// Dates are epoch milliseconds. fileCreationTime can be null because
+// Android often does not expose it.
 export interface ScanResult {
   fileName: string;
   filePath: string;

@@ -1,22 +1,9 @@
-// ============================================================
-// Detection engine, ported from the detection part of
-// core/ScanOrchestrator.java:
-//   detectAndRecordFindings, resolveOverlaps, isValid, recordFinding
-//
-// Pipeline for one chunk of extracted text:
-//   1. Run every active detector (regex finds CANDIDATES).
-//   2. Keep only candidates that pass their checksum.
-//   3. Resolve overlaps (the same text matched by several detectors).
-//   4. Skip values already reported earlier in the same file.
-// Then buildScanResult masks the value and attaches risk and confidence.
-// ============================================================
 import { Confidence, ScanResult, SensitiveDataType } from '../../types';
 import { SensitiveDataDetector } from './detectors/SensitiveDataDetector';
 import { classifyRisk } from './riskClassifier';
 import { maskValue } from './masker';
 import { isValidAadhaar, isValidLuhn } from './validators';
 
-// A candidate that passed validation (Java: private record ValidatedMatch).
 export interface ValidatedMatch {
   type: SensitiveDataType;
   value: string;
@@ -63,9 +50,6 @@ function isValid(candidate: string, type: SensitiveDataType): boolean {
   }
 }
 
-// Picks the winners when several detectors matched the same text.
-// Rule: longest match first; on equal length, higher priority first;
-// on a full tie, the detector that came first in the registry list.
 function resolveOverlaps(candidates: ValidatedMatch[]): ValidatedMatch[] {
   const sorted = candidates
     .map((match, index) => ({ match, index }))
@@ -86,8 +70,6 @@ function resolveOverlaps(candidates: ValidatedMatch[]): ValidatedMatch[] {
   return accepted;
 }
 
-// Finds the real (validated, non-overlapping, new) findings in one chunk.
-// alreadyFoundInFile: one Set per file, shared by all chunks of that file.
 export function detectInChunk(
   text: string,
   activeDetectors: readonly SensitiveDataDetector[],
