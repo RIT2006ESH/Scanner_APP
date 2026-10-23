@@ -1,6 +1,3 @@
-// ============================================================
-// Small shared building blocks for all screens.
-// ============================================================
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { ScanRunStatus } from '../services/core/scanContext';

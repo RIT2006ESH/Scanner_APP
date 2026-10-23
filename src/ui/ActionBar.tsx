@@ -1,11 +1,3 @@
-// ============================================================
-// The bar at the bottom of the screen. It is always visible, so the
-// scan can be started without scrolling:
-//   no files chosen  -> one big "Select files" button
-//   files chosen     -> "Change files (n)" and "Run Scan"
-//   scan running     -> current file and "Stop Scan"
-// Messages (notices) also appear here, so they are never scrolled away.
-// ============================================================
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Button, COLORS } from './components';

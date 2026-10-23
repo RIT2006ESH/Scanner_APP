@@ -1,9 +1,3 @@
-// ============================================================
-// "1. Scan Configuration" (web: index.html section 1).
-// Choosing files and starting the scan now happen in the bottom bar
-// (ActionBar), so this section only holds the settings.
-// Holds no scan logic: every choice goes up to App through props.
-// ============================================================
 import React, { useState } from 'react';
 import { StyleSheet, Switch, Text, View } from 'react-native';
 import { ScanOptions } from '../services/core/scanContext';

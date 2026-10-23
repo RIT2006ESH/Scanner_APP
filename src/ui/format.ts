@@ -1,8 +1,3 @@
-// ============================================================
-// Text helpers for the screens, ported from the web dashboard.js:
-//   TYPE_LABELS, friendlyType, formatTimestamp, formatDurationMs
-// Dates are epoch milliseconds (null = not available).
-// ============================================================
 import { SensitiveDataType } from '../types';
 
 // Friendly names shown instead of the internal type names.

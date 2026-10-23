@@ -2,16 +2,24 @@
 // "4. Findings" (web: index.html section 4).
 // Search, risk filter, PII type filter, Clear Filters, Export, and
 // 10 findings per page. A finding is shown as a card instead of a
-// table row, because a phone screen is too narrow for 8 columns.
+// table row, because a phone screen is too narrow for 9 columns.
 // ============================================================
 import React, { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { exportFindingsCsv } from '../services/export/reportExport';
-import { RISK_LEVELS, RiskLevel, ScanResult, SENSITIVE_DATA_TYPES, SensitiveDataType } from '../types';
+import { Confidence, RISK_LEVELS, RiskLevel, ScanResult, SENSITIVE_DATA_TYPES, SensitiveDataType } from '../types';
 import { Button, Chip, COLORS, Pager, RiskBadge, Section } from './components';
 import { formatTimestamp, friendlyType } from './format';
 
 const PAGE_SIZE = 10;
+
+// How each finding was verified, in plain words.
+const CONFIDENCE_LABELS: Record<Confidence, string> = {
+  CHECKSUM: 'Checksum verified',
+  PATTERN: 'Pattern match',
+  MODEL_CONFIRMED: 'Model confirmed',
+  MODEL_UNREVIEWED: 'Not reviewed by model',
+};
 
 interface Props {
   // Newest first.
@@ -30,6 +38,7 @@ function FindingCard({ item }: { item: ScanResult }): React.JSX.Element {
         <RiskBadge level={item.riskLevel} />
       </View>
       <Text style={styles.value}>{item.maskedValue}</Text>
+      <Text style={styles.confidence}>{CONFIDENCE_LABELS[item.confidence] ?? item.confidence}</Text>
       <Text style={styles.file} numberOfLines={1}>
         {item.fileName}
       </Text>
@@ -189,6 +198,7 @@ const styles = StyleSheet.create({
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   type: { fontSize: 13, fontWeight: '600', color: COLORS.text },
   value: { fontSize: 16, color: '#000000', marginTop: 4, fontFamily: 'monospace' },
+  confidence: { fontSize: 11, color: COLORS.navy, marginTop: 2 },
   file: { fontSize: 12, color: COLORS.text, marginTop: 4 },
   path: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
 });

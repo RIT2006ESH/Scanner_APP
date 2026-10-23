@@ -1,7 +1,3 @@
-// ============================================================
-// "2. Scan Status" and "3. Scan Summary" (web: index.html sections 2, 3).
-// Both read the live ScanContext; the parent redraws them on every change.
-// ============================================================
 import React, { useEffect, useReducer } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { ScanContext, ScanRunStatus } from '../services/core/scanContext';
