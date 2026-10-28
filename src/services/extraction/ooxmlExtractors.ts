@@ -71,6 +71,7 @@ function decodeXml(text: string): string {
     }
   });
 }
+const TEXT_RUN = /<(?:\w+:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:\w+:)?t>/g;
 function joinTextRuns(fragment: string): string {
   let text = '';
   for (const run of fragment.matchAll(TEXT_RUN)) {
