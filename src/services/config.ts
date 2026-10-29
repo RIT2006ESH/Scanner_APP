@@ -32,6 +32,9 @@ export interface ScannerConfig {
   // How many recent findings the live view keeps.
   liveFindingsBufferSize: number;
 
+  // Files bigger than this are skipped (docx/xlsx are read whole into memory).
+  maxFileSizeMb: number;
+
   // Time limit for a user-defined regex on one chunk.
   customRegexTimeoutMillis: number;
 
@@ -66,6 +69,7 @@ export const CONFIG: ScannerConfig = {
   perFileTimeoutSeconds: 60,
   liveFindingsBufferSize: 200,
   customRegexTimeoutMillis: 250,
+  maxFileSizeMb: 50,
   minFreeDiskSpaceMb: 500,
 
   report: {

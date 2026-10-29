@@ -47,7 +47,7 @@ export function ActionBar(props: Props): React.JSX.Element {
       ) : (
         <View style={styles.row}>
           <View style={styles.side}>
-            <Button label={'Change files (' + props.selectedCount + ')'} onPress={props.onSelect} disabled={props.busy} />
+            <Button label={'Change selection'} onPress={props.onSelect} disabled={props.busy} />
           </View>
           <View style={styles.main}>
             <Button label="Run Scan" kind="primary" onPress={props.onRun} disabled={props.busy} />

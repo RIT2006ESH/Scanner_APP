@@ -119,6 +119,12 @@ async function processFile(
   activeDetectors: readonly SensitiveDataDetector[],
   slmQueue: SlmCandidate[] | null,
 ): Promise<void> {
+  // Too big to read safely: count as skipped.
+  if (file.size != null && file.size > CONFIG.maxFileSizeMb * 1024 * 1024) {
+    context.incrementFilesSkipped();
+    return;
+  }
+
   context.setCurrentFile(file.path);
 
   // Unsupported file types and types without an extractor (pdf, for now)
