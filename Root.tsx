@@ -26,6 +26,8 @@ function Root(): React.JSX.Element {
       return;
     }
     prompting.current = true;
+    // Let the screen finish drawing before the system prompt opens.
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 800));
     const result = await unlockApp();
     prompting.current = false;
     if (result === 'ok') {
