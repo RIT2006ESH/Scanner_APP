@@ -1,3 +1,4 @@
+import { getDbKey } from './dbKey';
 // ============================================================
 // Local result store (SQLite, encrypted with sqlcipher) using op-sqlite.
 // Saves every finding of a scan and one record per scan run, reads them
@@ -36,11 +37,10 @@ let dbPromise: Promise<DB> | null = null;
 function getDb(): Promise<DB> {
   if (!dbPromise) {
     dbPromise = (async () => {
+      const dbKey = await getDbKey();
       const db = open({
         name: 'sentinelscan.db',
-        // TODO: pull from Android Keystore (react-native-keychain).
-        // Left unchanged until then, so the existing database stays readable.
-        encryptionKey: 'TODO_replace_with_securely_generated_key',
+        encryptionKey: dbKey,
       });
 
       // One row per finding. Dates are epoch milliseconds.
