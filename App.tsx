@@ -42,6 +42,7 @@ import { FindingsSection } from './src/ui/FindingsSection';
 import { HistorySection } from './src/ui/HistorySection';
 import { StatusSection, SummarySection } from './src/ui/StatusSections';
 import { FolderSection } from './src/ui/FolderSection';
+import { FolderBrowser } from './src/ui/FolderBrowser';
 import { startScanService, stopScanService } from './src/services/scanService';
 import { isAllFilesAccessGranted, openAllFilesSettings } from './src/services/allFilesAccess';
 
@@ -67,6 +68,7 @@ function App(): React.JSX.Element {
   // Real folders to scan (null = scan the copied files in the temporary folder).
   const [targetRoots, setTargetRoots] = useState<string[] | null>(null);
   const [allFilesGranted, setAllFilesGranted] = useState<boolean | null>(null);
+  const [browserOpen, setBrowserOpen] = useState(false);
 
   // Check the permission now, and again every time the user comes back from Settings.
   useEffect(() => {
@@ -260,6 +262,22 @@ function App(): React.JSX.Element {
     [running],
   );
 
+  // Folders chosen in the in-app browser: scanned in place, nothing is copied.
+  const pickFolders = useCallback(
+    async (paths: string[]) => {
+      if (running) {
+        return;
+      }
+      await clearStaging();
+      setTargetRoots(paths);
+      setSelectedNames(paths.map((p) => p.substring(p.lastIndexOf('/') + 1) || p));
+      setDbFindings(null);
+      setBrowserOpen(false);
+      setNotice(paths.length + ' folder(s) selected. Tap "Run Scan".');
+    },
+    [running],
+  );
+
   const grantAllFiles = useCallback(() => {
     openAllFilesSettings().catch((e) => setNotice('Could not open Settings: ' + String(e)));
   }, []);
@@ -305,6 +323,11 @@ function App(): React.JSX.Element {
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="dark-content" />
+      <FolderBrowser
+        visible={browserOpen}
+        onClose={() => setBrowserOpen(false)}
+        onConfirm={pickFolders}
+      />
       <SafeAreaView style={styles.screen}>
         <View style={styles.header}>
           <View style={styles.headerText}>
@@ -333,6 +356,7 @@ function App(): React.JSX.Element {
             disabled={running}
             onGrant={grantAllFiles}
             onPick={pickFolder}
+            onBrowse={() => setBrowserOpen(true)}
           />
           <StatusSection context={context} />
           <SummarySection context={context} />

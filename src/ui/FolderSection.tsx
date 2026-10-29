@@ -8,6 +8,7 @@ interface Props {
   disabled: boolean;
   onGrant: () => void;
   onPick: (label: string, path: string) => void;
+  onBrowse: () => void;
 }
 
 export function FolderSection(props: Props): React.JSX.Element {
@@ -15,16 +16,26 @@ export function FolderSection(props: Props): React.JSX.Element {
     <View style={styles.card}>
       <Text style={styles.title}>Scan a folder</Text>
       {props.granted ? (
-        <View style={styles.grid}>
-          {QUICK_FOLDERS.map((f) => (
-            <View key={f.label} style={styles.cell}>
-              <Button
-                label={f.label}
-                onPress={() => props.onPick(f.label, f.path)}
-                disabled={props.disabled}
-              />
-            </View>
-          ))}
+        <View>
+          <View style={styles.grid}>
+            {QUICK_FOLDERS.map((f) => (
+              <View key={f.label} style={styles.cell}>
+                <Button
+                  label={f.label}
+                  onPress={() => props.onPick(f.label, f.path)}
+                  disabled={props.disabled}
+                />
+              </View>
+            ))}
+          </View>
+          <View style={styles.browse}>
+            <Button
+              label="Browse all folders..."
+              kind="primary"
+              onPress={props.onBrowse}
+              disabled={props.disabled}
+            />
+          </View>
         </View>
       ) : (
         <View>
@@ -52,4 +63,5 @@ const styles = StyleSheet.create({
   hint: { fontSize: 12, color: COLORS.muted, marginBottom: 10, lineHeight: 18 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   cell: { minWidth: '45%', flexGrow: 1 },
+  browse: { marginTop: 10 },
 });
