@@ -18,7 +18,7 @@ const POINTS: { title: string; body: string }[] = [
   },
   {
     title: 'You choose what to scan',
-    body: 'The app can only read the files and folders you pick. It does not browse your phone on its own.',
+    body: 'The app reads files only while a scan is running. If you allow All files access, a whole-phone scan can read every file Android lets it open.',
   },
   {
     title: 'It can be wrong',

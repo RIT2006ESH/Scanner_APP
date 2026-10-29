@@ -42,6 +42,7 @@ import { FindingsSection } from './src/ui/FindingsSection';
 import { HistorySection } from './src/ui/HistorySection';
 import { StatusSection, SummarySection } from './src/ui/StatusSections';
 import { FolderSection } from './src/ui/FolderSection';
+import { startScanService, stopScanService } from './src/services/scanService';
 import { isAllFilesAccessGranted, openAllFilesSettings } from './src/services/allFilesAccess';
 
 // Temporary folder that holds the copies of the chosen files.
@@ -194,6 +195,7 @@ function App(): React.JSX.Element {
     const scan = new ScanContext(selectedNames.join(', '));
     setContext(scan);
     setRunning(true);
+    await startScanService();
     const stopListening = scan.subscribe(() => redraw());
 
     try {
@@ -223,6 +225,7 @@ function App(): React.JSX.Element {
       setNotice('Scan failed: ' + String(error));
     } finally {
       stopListening();
+      await stopScanService();
       setRunning(false);
       // The temporary copies are not needed any more: delete them.
       await clearStaging();
