@@ -73,6 +73,10 @@ async function walkFolder(
     }
 
     if (entry.isDirectory()) {
+      // Other apps' private folders: Android never lets us read them.
+      if (/\/Android\/(data|obb)$/.test(entry.path)) {
+        continue;
+      }
       if (!options.recursive) {
         continue;
       }

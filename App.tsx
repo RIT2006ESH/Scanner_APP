@@ -20,7 +20,7 @@
 //      results are read back from the encrypted local database.
 // ============================================================
 import React, { useCallback, useEffect, useReducer, useState } from 'react';
-import { Keyboard, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { AppState, Keyboard, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import RNFS from 'react-native-fs';
 import { pick, types } from '@react-native-documents/picker';
@@ -41,6 +41,8 @@ import { ConfigSection } from './src/ui/ConfigSection';
 import { FindingsSection } from './src/ui/FindingsSection';
 import { HistorySection } from './src/ui/HistorySection';
 import { StatusSection, SummarySection } from './src/ui/StatusSections';
+import { FolderSection } from './src/ui/FolderSection';
+import { isAllFilesAccessGranted, openAllFilesSettings } from './src/services/allFilesAccess';
 
 // Temporary folder that holds the copies of the chosen files.
 const STAGING_FOLDER = RNFS.CachesDirectoryPath + '/SentinelScanSelected';
@@ -61,6 +63,21 @@ function App(): React.JSX.Element {
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [selectedNames, setSelectedNames] = useState<string[]>([]);
+  // Real folders to scan (null = scan the copied files in the temporary folder).
+  const [targetRoots, setTargetRoots] = useState<string[] | null>(null);
+  const [allFilesGranted, setAllFilesGranted] = useState<boolean | null>(null);
+
+  // Check the permission now, and again every time the user comes back from Settings.
+  useEffect(() => {
+    const check = () => isAllFilesAccessGranted().then(setAllFilesGranted);
+    check();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        check();
+      }
+    });
+    return () => sub.remove();
+  }, []);
   // Results read from the database (null = show the live scan instead).
   const [dbFindings, setDbFindings] = useState<ScanResult[] | null>(null);
   // The scan history (newest first).
@@ -148,6 +165,7 @@ function App(): React.JSX.Element {
       }
 
       setSelectedNames(names);
+      setTargetRoots(null);
       setDbFindings(null);
       setNotice(names.length + ' file(s) ready. Tap "Run Scan".');
     } catch (error) {
@@ -180,7 +198,7 @@ function App(): React.JSX.Element {
 
     try {
       const outcome = await executeScan(scan, {
-        roots: [STAGING_FOLDER],
+        roots: targetRoots ?? [STAGING_FOLDER],
         deepScan,
         options,
         enabledTypes: selectedPii.length > 0 ? new Set(selectedPii) : null,
@@ -209,11 +227,39 @@ function App(): React.JSX.Element {
       // The temporary copies are not needed any more: delete them.
       await clearStaging();
       setSelectedNames([]);
+      setTargetRoots(null);
       // The scan is in the history now: show it.
       await refreshRuns();
       redraw();
     }
-  }, [running, selectedNames, deepScan, options, selectedPii, refreshRuns]);
+  }, [running, selectedNames, targetRoots, deepScan, options, selectedPii, refreshRuns]);
+
+  // A quick folder button: the real folder is scanned, nothing is copied.
+  const pickFolder = useCallback(
+    async (label: string, path: string) => {
+      if (running) {
+        return;
+      }
+      if (!(await isAllFilesAccessGranted())) {
+        setAllFilesGranted(false);
+        return;
+      }
+      if (!(await RNFS.exists(path))) {
+        setNotice(label + ' was not found on this phone.');
+        return;
+      }
+      await clearStaging();
+      setTargetRoots([path]);
+      setSelectedNames([label]);
+      setDbFindings(null);
+      setNotice(label + ' selected. Tap "Run Scan".');
+    },
+    [running],
+  );
+
+  const grantAllFiles = useCallback(() => {
+    openAllFilesSettings().catch((e) => setNotice('Could not open Settings: ' + String(e)));
+  }, []);
 
   const stopScan = useCallback(() => {
     context?.requestCancel();
@@ -278,6 +324,12 @@ function App(): React.JSX.Element {
             modelReady={modelReady}
             downloadPercent={downloadPercent}
             onDownloadModel={downloadModelFile}
+          />
+          <FolderSection
+            granted={allFilesGranted}
+            disabled={running}
+            onGrant={grantAllFiles}
+            onPick={pickFolder}
           />
           <StatusSection context={context} />
           <SummarySection context={context} />
