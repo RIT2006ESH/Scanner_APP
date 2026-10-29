@@ -2,7 +2,7 @@ import notifee, { AndroidForegroundServiceType, AndroidImportance } from '@notif
 
 const CHANNEL_ID = 'scan-progress';
 
-// Shows an ongoing notification, so Android keeps the scan alive in the background.
+// An ongoing notification keeps Android from killing a long scan in the background.
 export async function startScanService(): Promise<void> {
   try {
     await notifee.requestPermission();
