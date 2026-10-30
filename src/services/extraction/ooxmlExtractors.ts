@@ -46,7 +46,7 @@ async function readZipEntries(
   });
 }
 
-function decodeXml(text: string): string {
+export function decodeXml(text: string): string {
   return text.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);/g, (whole, entity: string) => {
     switch (entity) {
       case 'amp':
@@ -72,7 +72,7 @@ function decodeXml(text: string): string {
   });
 }
 const TEXT_RUN = /<(?:\w+:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:\w+:)?t>/g;
-function joinTextRuns(fragment: string): string {
+export function joinTextRuns(fragment: string): string {
   let text = '';
   for (const run of fragment.matchAll(TEXT_RUN)) {
     text += decodeXml(run[1]);
