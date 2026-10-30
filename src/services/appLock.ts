@@ -4,37 +4,48 @@ import * as Keychain from 'react-native-keychain';
 // fingerprint or screen lock (PIN / pattern / password) is confirmed.
 const SERVICE = 'sentinelscan.lock';
 
-async function ensureLockEntry(): Promise<boolean> {
-  try {
-    if (await Keychain.hasGenericPassword({ service: SERVICE })) {
-      return true;
-    }
-    await Keychain.setGenericPassword('lock', '1', {
-      service: SERVICE,
-      accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE,
-      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-    });
-    return true;
-  } catch (error) {
-    // Usually: the phone has no screen lock set.
-    console.warn('App lock unavailable: ' + String(error));
-    return false;
-  }
-}
-
 export type UnlockResult = 'ok' | 'failed' | 'unavailable';
 
+function isCancel(error: unknown): boolean {
+  return String(error).toLowerCase().includes('cancel');
+}
+
+async function createEntry(): Promise<void> {
+  await Keychain.setGenericPassword('lock', '1', {
+    service: SERVICE,
+    accessControl: Keychain.ACCESS_CONTROL.DEVICE_PASSCODE,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}
+
+async function readEntry(): Promise<UnlockResult> {
+  const entry = await Keychain.getGenericPassword({
+    service: SERVICE,
+    authenticationPrompt: { title: 'Unlock SentinelScan' },
+  });
+  return entry ? 'ok' : 'failed';
+}
+
 export async function unlockApp(): Promise<UnlockResult> {
-  if (!(await ensureLockEntry())) {
-    return 'unavailable';
-  }
   try {
-    const entry = await Keychain.getGenericPassword({
-      service: SERVICE,
-      authenticationPrompt: { title: 'Unlock SentinelScan' },
-    });
-    return entry ? 'ok' : 'failed';
-  } catch {
-    return 'failed'; // cancelled or wrong credential
+    if (!(await Keychain.hasGenericPassword({ service: SERVICE }))) {
+      await createEntry();
+    }
+    return await readEntry();
+  } catch (error) {
+    console.warn('App lock error: ' + String(error));
+    if (isCancel(error)) {
+      return 'failed'; // the user dismissed the prompt
+    }
+    // Not a cancel: the stored key is probably invalid (screen lock was
+    // changed or removed). Reset the entry and try once more.
+    try {
+      await Keychain.resetGenericPassword({ service: SERVICE });
+      await createEntry();
+      return await readEntry();
+    } catch (retryError) {
+      console.warn('App lock unavailable: ' + String(retryError));
+      return isCancel(retryError) ? 'failed' : 'unavailable';
+    }
   }
 }
