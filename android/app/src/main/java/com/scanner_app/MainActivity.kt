@@ -1,5 +1,6 @@
 package com.scanner_app
 
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.view.WindowManager
 import com.facebook.react.ReactActivity
@@ -13,9 +14,12 @@ class MainActivity : ReactActivity() {
     // FLAG_SECURE: the screen shows blank in the Recents list, and screenshots
     // and screen recording are blocked. Comment this line out only when you
     // need dev screenshots, and put it back afterwards.
-    window.setFlags(
-        WindowManager.LayoutParams.FLAG_SECURE,
-        WindowManager.LayoutParams.FLAG_SECURE)
+    val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    if (!isDebuggable) {
+      window.setFlags(
+          WindowManager.LayoutParams.FLAG_SECURE,
+          WindowManager.LayoutParams.FLAG_SECURE)
+    }
     super.onCreate(savedInstanceState)
   }
 
